@@ -36,6 +36,13 @@ int cmd_FEAT_func(struct ftpsp_client *client)
     return 1;
 }
 
+int cmd_NOOP_func(struct ftpsp_client *client)
+{
+    client_send_ctrl_msg(client, "200 Command okay.");  
+    return 1;
+}
+
+
 int cmd_PWD_func(struct ftpsp_client *client)
 {
     char path[PATH_MAX];
@@ -85,19 +92,6 @@ int cmd_PASV_func(struct ftpsp_client *client)
     return ftpsp_start_pasv(client);    
 }
 
-/*
-     -rw-r--r-- 1 owner group           213 Aug 26 16:31 README
-The line contains
-
-        - for a regular file or d for a directory;
-        the literal string rw-r--r-- 1 owner group for a regular file, or rwxr-xr-x 1 owner group for a directory;
-        the file size in decimal right-justified in a 13-byte field;
-        a three-letter month name, first letter capitalized;
-        a day number right-justified in a 3-byte field;
-        a space and a 2-digit hour number;
-        a colon and a 2-digit minute number;
-        a space and the abbreviated pathname of the file.
-*/
 
 static const char *num_to_month[] = {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -213,5 +207,46 @@ int cmd_CDUP_func(struct ftpsp_client *client)
     dir_up(buf, client->cur_path);
     client_send_ctrl_msg(client, "200 Command okay.");
     return 1;
+}
+
+
+static int send_file(struct ftpsp_client *client, const char *path)
+{
+    char ms_path[PATH_MAX+4];
+    get_ms_path(ms_path, path);
+    printf("RETR ms path: %s\n", ms_path);
+    SceUID fd;
+    if ((fd = sceIoOpen(ms_path, PSP_O_RDONLY, 0777)) >= 0) {
+        ftpsp_open_data(client);
+        client_send_ctrl_msg(client, "150 Opening Image mode data transfer for LIST");
+        
+        unsigned int bytes_read;
+        while ((bytes_read = sceIoRead (fd, client->wr_buffer, BUF_SIZE)) > 0) {
+            send(client->data_sock, client->wr_buffer, bytes_read, 0);
+        }
+
+        sceIoClose(fd);
+        client_send_ctrl_msg(client, "226 Transfer complete");
+        ftpsp_close_data(client);
+        
+    } else {
+        client_send_ctrl_msg(client, "550 File Not Found");
+    }
+    return 1;
+}
+
+int cmd_RETR_func(struct ftpsp_client *client)
+{
+    char path[PATH_MAX];
+    char cur_path[PATH_MAX];
+    sscanf(client->rd_buffer, "%*[^ ] %[^\r\n\t]", path);
+    strcpy(cur_path, client->cur_path);
+    if (strchr(path, '/') == NULL) { //File relative to current dir
+        if (cur_path[strlen(cur_path) - 1] != '/')
+            strcat(cur_path, "/");
+        strcat(cur_path, path);
+    } 
+    send_file(client, cur_path);
+    return 1;       
 }
 

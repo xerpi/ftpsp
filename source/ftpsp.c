@@ -17,6 +17,7 @@ struct dispatch_entry dispatch_table[] = {
     add_entry(PASS),
     add_entry(SYST),
     add_entry(FEAT),
+    add_entry(NOOP),
     add_entry(PWD),
     add_entry(QUIT),
     add_entry(TYPE),
@@ -24,6 +25,7 @@ struct dispatch_entry dispatch_table[] = {
     add_entry(LIST),
     add_entry(CWD),
     add_entry(CDUP),
+    add_entry(RETR),
     {"\0",   NULL},
 };
 
@@ -150,7 +152,7 @@ static int client_thread(SceSize args, void *argp)
 
 static void client_handle(struct ftpsp_client *client)
 {
-    memset(client->rd_buffer, 0, BUF_SIZE);
+    //memset(client->rd_buffer, 0, BUF_SIZE);
     int bytes_recv = recv(client->ctrl_sock, client->rd_buffer, BUF_SIZE, 0);
 
     if (bytes_recv <= 0) {              /* Client disconnected  or read error*/
