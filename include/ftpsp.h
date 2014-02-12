@@ -12,7 +12,6 @@ extern char psp_ip[16];
 
 #define BUF_SIZE 1024
 #define CTRL_PORT 21
-#define PASV_PORT 22
 
 enum FTPSP_CONN_MODE {
     FTPSP_CONN_NONE,   //Before PASV or PORT
@@ -20,11 +19,26 @@ enum FTPSP_CONN_MODE {
     FTPSP_CONN_PASSIVE
 };
 
+enum FTPSP_DATA_TYPE {
+    FTPSP_DATA_ASCII,
+    FTPSP_DATA_EBCDIC,
+    FTPSP_DATA_IMAGE, //Binary
+    FTPSP_DATA_LOCAL
+};
+
+enum FTPSP_FORMAT_CONTROL {
+    FTPSP_FMT_CTRL_NON_PRINT,
+    FTPSP_FMT_CTRL_TELNET,
+    FTPSP_FMT_CTRL_ASA_CARRIAGE
+};
+
 struct ftpsp_client {
     int ctrl_sock;
     int pasv_listener;
     int data_sock;
     int conn_mode;
+    int data_type;
+    int format_control;
     SceUID thid;
     int run_thread;
     struct in_addr ip_addr;

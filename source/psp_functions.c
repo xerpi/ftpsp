@@ -45,9 +45,9 @@ int cmd_NOOP_func(struct ftpsp_client *client)
 
 int cmd_PWD_func(struct ftpsp_client *client)
 {
-    char path[PATH_MAX];
-    sprintf(path, "257 \"%s\" is current directory.", client->cur_path);
-    client_send_ctrl_msg(client, path);
+    char msg[strlen(client->cur_path) + 32];
+    sprintf(msg, "257 \"%s\" is current directory.", client->cur_path);
+    client_send_ctrl_msg(client, msg);
     return 1;
 }
 
@@ -57,29 +57,57 @@ int cmd_QUIT_func(struct ftpsp_client *client)
     return 1;
 }
 
+static void parse_format_control(struct ftpsp_client *client, int n_args, char *format_control)
+{
+    if (n_args < 2) { //Default is 'N'
+        client->format_control = FTPSP_FMT_CTRL_NON_PRINT;
+    } else {
+        if (strlen(format_control) == 1) {
+            switch (format_control[0]) {
+            default:
+            case 'N':
+                client->format_control = FTPSP_FMT_CTRL_NON_PRINT;
+                break;
+            case 'T':
+                client->format_control = FTPSP_FMT_CTRL_TELNET;
+                break;
+            case 'C':
+                client->format_control = FTPSP_FMT_CTRL_ASA_CARRIAGE;
+                break;
+            }
+        } else {
+            client->format_control = atoi(format_control);
+        }   
+    }
+}
+
 int cmd_TYPE_func(struct ftpsp_client *client)
 {
-    char data_type, format_control;
-    int args = sscanf(client->rd_buffer, "%*s %c %c", &data_type, &format_control);
+    char data_type;
+    char format_control[8];
+    int n_args = sscanf(client->rd_buffer, "%*s %c %s", &data_type, format_control);
     
-    if (args > 0) {
+    if (n_args > 0) {
         switch(data_type) {
         case 'A':
-            if (args < 2) {
-                client_send_ctrl_msg(client, "504 Error: bad parameters?");
-            } else {
-                client_send_ctrl_msg(client, "200 Okay");
-            }
+            client->data_type = FTPSP_DATA_ASCII;
+            parse_format_control(client, n_args, format_control);
             break;
         case 'I':
-            client_send_ctrl_msg(client, "200 Okay");
+            client->data_type = FTPSP_DATA_IMAGE;
             break;
         case 'E':
-        case 'L':
-        default:
-            client_send_ctrl_msg(client, "504 Error: command not implemented with this parameter");
+            client->data_type = FTPSP_DATA_EBCDIC;
+            parse_format_control(client, n_args, format_control);
             break;
+        case 'L':
+            client->data_type = FTPSP_DATA_LOCAL;
+            parse_format_control(client, n_args, format_control);
+        default:
+            client_send_ctrl_msg(client, "504 Error: bad parameters?");
+            return 0;
         }
+        client_send_ctrl_msg(client, "200 Okay");
     } else {
         client_send_ctrl_msg(client, "504 Error: bad parameters?");
     }
@@ -120,18 +148,16 @@ static int get_ms_path(char *ms_path, const char *path)
 
 static int send_LIST(struct ftpsp_client *client, const char *path)
 {
-    //client_send_ctrl_msg(client->data_sock, "-rw-r--r--  1 xerpi xerpi 103004 feb 10 19:33 EBOOT.PBP");
-    ftpsp_open_data(client);
+    client->data_sock = accept(client->pasv_listener, NULL, NULL);
     client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST");
     
     char ms_path[PATH_MAX+4];
     get_ms_path(ms_path, path);
-    printf("ms path: %s\n", ms_path);
+    //printf("LIST ms path: %s\n", ms_path);
     
     SceUID dir = sceIoDopen(ms_path);
     SceIoDirent dirent;
     memset(&dirent, 0, sizeof(dirent));
-
     
     while (sceIoDread(dir, &dirent) > 0) {
         parse_ls_format(client->wr_buffer, BUF_SIZE,
@@ -148,7 +174,6 @@ static int send_LIST(struct ftpsp_client *client, const char *path)
     }
     
     sceIoDclose(dir);
-    
     client_send_ctrl_msg(client, "226 Transfer complete");
     ftpsp_close_data(client);
     return 1;
@@ -157,10 +182,10 @@ static int send_LIST(struct ftpsp_client *client, const char *path)
 int cmd_LIST_func(struct ftpsp_client *client)
 {
     char path[PATH_MAX];
-    int n = sscanf(client->rd_buffer, "%*[^ ] %[^\r\n\t]", path);
+    int n = sscanf(client->rd_buffer, "%*s %[^\r\n\t]", path);
     if (n > 0) {  /* Client specified a path */
         send_LIST(client, path);
-    } else { /* Use current path */
+    } else {      /* Use current path */
         send_LIST(client, client->cur_path);
     }
     return 1;   
@@ -169,7 +194,7 @@ int cmd_LIST_func(struct ftpsp_client *client)
 int cmd_CWD_func(struct ftpsp_client *client)
 {
     char path[PATH_MAX];
-    int n = sscanf(client->rd_buffer, "%*[^ ] %[^\r\n\t]", path);
+    int n = sscanf(client->rd_buffer, "%*s %[^\r\n\t]", path);
     if (n < 1) {
         client_send_ctrl_msg(client, "500 Syntax error, command unrecognized");
     } else {
@@ -214,11 +239,11 @@ static int send_file(struct ftpsp_client *client, const char *path)
 {
     char ms_path[PATH_MAX+4];
     get_ms_path(ms_path, path);
-    printf("RETR ms path: %s\n", ms_path);
+    //printf("RETR ms path: %s\n", ms_path);
     SceUID fd;
     if ((fd = sceIoOpen(ms_path, PSP_O_RDONLY, 0777)) >= 0) {
         ftpsp_open_data(client);
-        client_send_ctrl_msg(client, "150 Opening Image mode data transfer for LIST");
+        client_send_ctrl_msg(client, "150 Opening Image mode data transfer");
         
         unsigned int bytes_read;
         while ((bytes_read = sceIoRead (fd, client->wr_buffer, BUF_SIZE)) > 0) {
@@ -226,7 +251,7 @@ static int send_file(struct ftpsp_client *client, const char *path)
         }
 
         sceIoClose(fd);
-        client_send_ctrl_msg(client, "226 Transfer complete");
+        client_send_ctrl_msg(client, "226 Transfer completed");
         ftpsp_close_data(client);
         
     } else {
@@ -245,7 +270,8 @@ int cmd_RETR_func(struct ftpsp_client *client)
         if (cur_path[strlen(cur_path) - 1] != '/')
             strcat(cur_path, "/");
         strcat(cur_path, path);
-    } 
+    }
+    //printf("RETR: %s\n", cur_path);
     send_file(client, cur_path);
     return 1;       
 }
