@@ -20,6 +20,7 @@ int cmd_PWD_func(struct ftpsp_client *client);
 int cmd_QUIT_func(struct ftpsp_client *client);
 int cmd_TYPE_func(struct ftpsp_client *client);
 int cmd_PASV_func(struct ftpsp_client *client);
+int cmd_PORT_func(struct ftpsp_client *client);
 int cmd_LIST_func(struct ftpsp_client *client);
 int cmd_CWD_func(struct ftpsp_client *client);
 int cmd_CDUP_func(struct ftpsp_client *client);

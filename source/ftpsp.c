@@ -21,7 +21,8 @@ struct dispatch_entry dispatch_table[] = {
     add_entry(PWD),
     add_entry(QUIT),
     add_entry(TYPE),
-    add_entry(PASV),
+    //add_entry(PASV),
+    add_entry(PORT),
     add_entry(LIST),
     add_entry(CWD),
     add_entry(CDUP),
@@ -102,17 +103,20 @@ static int server_thread(SceSize args, void *argp)
     printf("Waiting for clients to connect...\n");
     while (run_server_th) {
         
+        printf("BEFORE ACCEPT!!! size: %d\n", client_list_size());
+        int client_sock = accept(server_sock, NULL, NULL);
+        printf("AFTER ACCEPT!!! size: %d\n", client_list_size());
+
         struct sockaddr_in new_addr;
         socklen_t addr_len = sizeof(new_addr);
-        int client_sock = accept(server_sock,
-                                (struct sockaddr *) &new_addr,
-                                 &addr_len);
+        getpeername(client_sock, (struct sockaddr *)&new_addr, &addr_len);   
 
-    int port = ntohs(new_addr.sin_port);   
-    uint32_t ip_n = ntohl(new_addr.sin_addr.s_addr);
-    unsigned char *ip = (unsigned char*)&ip_n;
 
-   printf("Connection from: %d.%d.%d.%d  port: %d\n", ip[3], ip[2], ip[1], ip[0], port);
+        int port = ntohs(new_addr.sin_port);   
+        uint32_t ip_n = ntohl(new_addr.sin_addr.s_addr);
+        unsigned char *ip = (unsigned char*)&ip_n;
+
+        printf("Connection from: %d.%d.%d.%d  port: %d\n", ip[3], ip[2], ip[1], ip[0], port);
 
         
         if (client_sock >= 0) {
@@ -159,7 +163,7 @@ static int client_thread(SceSize args, void *argp)
 
 static int get_command(const char *buffer, char *cmd_out)
 {
-    return sscanf(buffer, "%s", cmd_out);;
+    return sscanf(buffer, "%s", cmd_out);
 }
 
 static void client_handle(struct ftpsp_client *client)
@@ -215,19 +219,14 @@ static struct ftpsp_client *client_create(int socket, struct sockaddr_in *sockad
     client->next = NULL;
     client->prev = NULL;
     //inet_ntop(AF_INET, (void*)&sockaddr->sin_addr, client->ip, 16);
-    printf("new connection from: %s\n", inet_ntoa(sockaddr->sin_addr));
+    //printf("new connection from: %s   port: %d\n", inet_ntoa(sockaddr->sin_addr), ntohs(sockaddr->sin_port));
     return client;
 }
 
 
 int ftpsp_start_pasv(struct ftpsp_client *client)
 {
-    //If we are in passive, stop it before starting it again
-    if (client->conn_mode == FTPSP_CONN_PASSIVE) {
-        ftpsp_stop_pasv(client);
-        
-    //If we are in active, close it before starting passive
-    } else if (client->conn_mode == FTPSP_CONN_ACTIVE) {
+    if (client->conn_mode != FTPSP_CONN_NONE) {
         ftpsp_close_data(client);
     }
 
@@ -242,7 +241,7 @@ int ftpsp_start_pasv(struct ftpsp_client *client)
     listener.sin_port = 0;
 
     bind(client->pasv_listener, (struct sockaddr *) &listener, sizeof(listener));
-    listen(client->pasv_listener, 128);
+    listen(client->pasv_listener, 0);
     
     struct sockaddr_in pasv_addr;
     socklen_t pasv_len = sizeof(pasv_addr);
@@ -261,25 +260,27 @@ int ftpsp_start_pasv(struct ftpsp_client *client)
 
 int ftpsp_stop_pasv(struct ftpsp_client *client)
 {
-    if (client->conn_mode == FTPSP_CONN_PASSIVE) {
-        shutdown(client->pasv_listener, SHUT_RDWR);
-        close(client->pasv_listener);
-        client->pasv_listener = -1;
-        client->conn_mode = FTPSP_CONN_NONE;
-    }
+    //shutdown(client->pasv_listener, SHUT_RDWR);
+    close(client->pasv_listener);
+    client->pasv_listener = -1;
+    client->conn_mode = FTPSP_CONN_NONE;
     return 1;
 }
 
 int ftpsp_open_data(struct ftpsp_client *client)
 {
     if (client->conn_mode == FTPSP_CONN_ACTIVE) {
-        //TODO
+        //Nothing?
     } else if (client->conn_mode == FTPSP_CONN_PASSIVE) {
-        /* Passive mode hasn't been started yet! */
-        if (client->pasv_listener < 0) {
-            ftpsp_start_pasv(client);
-        }
-        client->data_sock = accept(client->pasv_listener, NULL, NULL);
+        struct sockaddr_in addr;
+        socklen_t len = sizeof(addr);
+        client->data_sock = accept(client->pasv_listener,  (struct sockaddr *)&addr, &len);
+
+        int port = ntohs(addr.sin_port);
+        uint32_t ip_n = ntohl(addr.sin_addr.s_addr);
+        unsigned char *ip = (unsigned char*)&ip_n;
+
+        printf("PASV Connection from: %d.%d.%d.%d  port: %d\n", ip[3], ip[2], ip[1], ip[0], port);   
     }
     return 1;
 }
@@ -289,7 +290,11 @@ int ftpsp_close_data(struct ftpsp_client *client)
     if (client->conn_mode != FTPSP_CONN_NONE) {
         close(client->data_sock);
         client->data_sock = -1;
-        ftpsp_stop_pasv(client);
+        if (client->conn_mode == FTPSP_CONN_PASSIVE) {
+            ftpsp_stop_pasv(client);
+        } else {
+            client->conn_mode = FTPSP_CONN_NONE;
+        }
     }
     return 1;
 }
@@ -310,13 +315,15 @@ int client_send_data_msg(struct ftpsp_client *client, const char *msg)
 static void client_destroy(struct ftpsp_client *client)
 {
     client->run_thread = 0;
+    /*
     //SceUInt timeout = 1000;
     if (client->thid >= 0) {
-        //int ret = sceKernelWaitThreadEnd(client->thid, &timeout);
+        int sceKernelWaitThreadEnd(client->thid, &timeout);
         //if (ret == SCE_KERNEL_ERROR_WAIT_TIMEOUT)
             sceKernelTerminateDeleteThread(client->thid);
     }
     client_self_destroy(client);
+    */
 }
 
 static void client_self_destroy(struct ftpsp_client *client)

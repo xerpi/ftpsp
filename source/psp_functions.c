@@ -120,6 +120,39 @@ int cmd_PASV_func(struct ftpsp_client *client)
     return ftpsp_start_pasv(client);    
 }
 
+extern int errno;
+
+int cmd_PORT_func(struct ftpsp_client *client)
+{
+    int ip[4];
+    int porthi, portlo;
+    sscanf(client->rd_buffer, "%*s %d,%d,%d,%d,%d,%d",
+           &ip[3], &ip[2], &ip[1], &ip[0], &porthi, &portlo);
+           
+    int port = porthi*256 + portlo;
+    char ip_str[16];
+    sprintf(ip_str, "%d.%d.%d.%d", ip[3], ip[2], ip[1], ip[0]);
+    struct in_addr addr;
+    inet_pton(AF_INET, ip_str, &addr);
+    
+    
+    printf("PORT connection to ip: %s  port: %d\n", ip_str);
+    
+    client->data_sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in clientaddr;
+    clientaddr.sin_family = AF_INET;
+    clientaddr.sin_port = htons(port); 
+    clientaddr.sin_addr = addr;
+
+    if(connect(client->data_sock, (struct sockaddr *)&clientaddr, sizeof(struct sockaddr))==-1){ 
+        printf("connect() error: %d\n", errno);
+    }
+    
+    client->conn_mode = FTPSP_CONN_ACTIVE;
+    client_send_ctrl_msg(client, "200 PORT command successful");
+    return 1;
+}
+
 
 static const char *num_to_month[] = {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -148,7 +181,7 @@ static int get_ms_path(char *ms_path, const char *path)
 
 static int send_LIST(struct ftpsp_client *client, const char *path)
 {
-    client->data_sock = accept(client->pasv_listener, NULL, NULL);
+    ftpsp_open_data(client);
     client_send_ctrl_msg(client, "150 Opening ASCII mode data transfer for LIST");
     
     char ms_path[PATH_MAX+4];
